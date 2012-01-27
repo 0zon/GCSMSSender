@@ -13,7 +13,7 @@ uses
 const
   AUTHOR        = '0zon';
   INTERNAL_NAME = 'GCSMSSender';
-  VERSION       = '0.1.0';
+  VERSION       = '0.1.1';
 
 var
   Answer: String;
@@ -201,7 +201,8 @@ end;
 function SendSMSviaGC(Email, Passwd, Title, Content, Where, Proxy: String; var Answer: String): boolean;
 const
   ReminderMinutes = 1;
-  DeltaMinutes = 2; // must by greater than ReminderMinutes
+  DeltaMinutes = 4; // must by greater than ReminderMinutes
+  DurationMinutes = 5;
 var
   url, data, Auth: string;
   Header: TStringList;
@@ -227,7 +228,7 @@ begin
   data := '<atom:entry xmlns:atom="http://www.w3.org/2005/Atom">'+
   '  <atom:title type="text">' + T(Title) + '</atom:title>'+
   '  <atom:content type="text">' + T(Content) + '</atom:content>'+
-  '  <gd:when xmlns:gd="http://schemas.google.com/g/2005" startTime="' + GetDateGC(IncMinutes(Now, DeltaMinutes)) + '" endTime="' + GetDateGC(IncMinutes(Now, DeltaMinutes)) + '">'+
+  '  <gd:when xmlns:gd="http://schemas.google.com/g/2005" startTime="' + GetDateGC(IncMinutes(Now, DeltaMinutes)) + '" endTime="' + GetDateGC(IncMinutes(Now, DeltaMinutes + DurationMinutes)) + '">'+
   '    <gd:reminder minutes="' + inttostr(ReminderMinutes) + '" method="sms"/></gd:when>'+
   '  <gd:where xmlns:gd="http://schemas.google.com/g/2005" valueString="' + T(Where) + '"/></atom:entry>';
   Header.Clear;
@@ -244,7 +245,7 @@ begin
     ExitCode := 1;
     Write(ErrOutput, INTERNAL_NAME + ' v' + VERSION + ' by ' + AUTHOR + #13#10 + #13#10 +
     'Usage:' + #13#10 +
-    '    SendSMS email password smstext [smswhere proxy]');
+    '    SendSMS email password smstext [smswhere] [proxy:port]');
     exit;
   end;
 
@@ -261,3 +262,8 @@ begin
 
   CoUninitialize();
 end.
+(*
+v0.1.1
+[+] added DurationMinutes;
+[~] changed DeltaMinutes form 2 to 4 minutes.
+*)
