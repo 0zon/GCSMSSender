@@ -13,7 +13,7 @@ uses
 const
   AUTHOR        = '0zon';
   INTERNAL_NAME = 'GCSMSSender';
-  VERSION       = '0.1.1';
+  VERSION       = '0.1.2';
 
 var
   Answer: String;
@@ -26,7 +26,7 @@ begin
     Result := False;
 end;
 
-function HTTPRequest(Method: String; Url: String; Data: String; Referer: string; Header: TStringList; Proxy: string; var Error: Integer): String;
+function HTTPRequest(Method: String; Url: String; Data: String; RedirectMode: boolean; Header: TStringList; Proxy: string; var Error: Integer): String;
 const
   SXH_PROXY_SET_PROXY = 2;
   HTTPREQUEST_SETCREDENTIALS_FOR_SERVER = 0;
@@ -37,6 +37,7 @@ var
   HttpReq: OLEVariant;
   Key, Value: string;
   ProxyServer, ProxyUsername, ProxyPassword: string;
+  NewHeader: TStringList;
 begin
   // Create the WinHttpRequest COM object
   HttpReq := CreateOLEObject('WinHttp.WinHttpRequest.5.1');
@@ -91,13 +92,6 @@ begin
     exit;
   end;
 
-  {ErrorCode := HttpRequest.setTimeouts(20000, 20000, 30000, 30000);
-  if (ErrorCode <> S_OK) then begin
-    Error := 3;
-    Result := 'HTTP: Could not set timeouts.';
-    exit;
-  end;}
-
   if (Method = 'GET') and (Data <> '') then
     ErrorCode := HttpReq.Open(Method, Url + '?' + Data, false)
   else
@@ -108,35 +102,22 @@ begin
     exit;
   end;
 
-  {if (Username <> '') or (Password <> '') then
-  begin
-    ErrorCode := HttpRequest.SetCredentials(
-      Username, Password,
-      HTTPREQUEST_SETCREDENTIALS_FOR_SERVER);
-    if (ErrorCode <> S_OK) then begin
-      Error := 5;
-      Result := 'HTTP: Could not call SetCredentials().';
-      exit;
-    end;
-  end;}
-
   HttpReq.SetRequestHeader('User-Agent', AUTHOR + '-' + INTERNAL_NAME + '-' + VERSION);
-  if Referer <> '' then
-    HttpReq.SetRequestHeader('Referer', Referer);
 
   // disable redirect
-  HttpReq.Option(6) := false;
+  HttpReq.Option(6) := RedirectMode;
 
-  if Method = 'GET' then
+  for i:= 0 to Header.Count - 1 do begin
+    // Set HTTP Header
+    Key := Header[i];
+    Value := copy(Key, pos(': ', Key) + 2, MaxInt);
+    Key := copy(Key, 1, pos(': ', Key) - 1);
+    HttpReq.SetRequestHeader(Key, Value);
+  end;
+
+  if (Method = 'GET') or (Method = 'HEAD') then
     ErrorCode := HttpReq.Send()
   else begin
-    for i:= 0 to Header.Count - 1 do begin
-      // Set HTTP Header
-      Key := Header[i];
-      Value := copy(Key, pos(': ', Key) + 2, MaxInt);
-      Key := copy(Key, 1, pos(': ', Key) - 1);
-      HttpReq.SetRequestHeader(Key, Value);
-    end;
     if Header.Values['Content-Type'] = '' then
       HttpReq.SetRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
     HttpReq.SetRequestHeader('Content-Length', inttostr(Length(Data)));
@@ -150,16 +131,21 @@ begin
     exit;
   end;
 
-  if (HttpReq.Status >= 302) and (HttpReq.Status <= 304) and (not HttpReq.Option(6)) then begin
-    Result := HTTPRequest(Method, HttpReq.GetResponseHeader('Location'), Data, Url, Header, Proxy, Error);
+  Result := HttpReq.ResponseText;
+  {if HttpReq.Status div 100 = 2 then // 200, 201 ...
+    Error := -1 // good response code
+  else}
+    Error := HttpReq.Status;
+
+  if (HttpReq.Status div 100 = 3) and (HttpReq.Status <> 304) and (not HttpReq.Option(6)) then begin
+    // manualy redirection
+    NewHeader := TStringList.Create();
+    NewHeader.Assign(Header);
+    NewHeader.Add('Referer: ' + Url);
+    Result := HTTPRequest({'GET'}Method, HttpReq.GetResponseHeader('Location'), Data, RedirectMode, NewHeader, Proxy, Error);
+    NewHeader.Free;
     exit;
   end;
-
-  Result := HttpReq.ResponseText;
-  if Trunc(HttpReq.Status / 100) = 2 then // 200, 201 ...
-    Error := -1 // good response code
-  else
-    Error := HttpReq.Status;
 end;
 
 function GetDateGC(dt: TDateTime): string;
@@ -198,28 +184,46 @@ begin
   Result := dt + m * 60 / 86400;
 end;
 
-function SendSMSviaGC(Email, Passwd, Title, Content, Where, Proxy: String; var Answer: String): boolean;
+function SendSMSviaGC(const Email, Passwd, Title, Content, Where, Proxy: String; var Answer: String): boolean;
 const
   ReminderMinutes = 1;
   DeltaMinutes = 4; // must by greater than ReminderMinutes
   DurationMinutes = 5;
 var
-  url, data, Auth: string;
+  url, pass, data, Auth: string;
   Header: TStringList;
-  err: Integer;
+  i, err: Integer;
+  b: byte;
 begin
   Result := false;
 
-  url := 'https://www.google.com/accounts/ClientLogin';
-	data := 'Email=' + email + '&Passwd=' + passwd + '&service=cl&source=' + AUTHOR + '-' + INTERNAL_NAME + '-' + VERSION;
-  Header := TStringList.Create;
-  Answer := HTTPRequest('POST', url, data, '', Header, Proxy, Err);
-  if not Err = -1 then
-    exit;
+  // prepare password
+  pass := passwd;
+  if (Length(pass) > 3) and (pass[1] = '/') and (pass[2] <> '/') then begin //for examle: /21Q@RR
+    b := StrToInt('$' + copy(pass, 2, 2));
+    delete(pass, 1, 3);
+    for i := 1 to Length(pass) do
+      pass[i] := chr(ord(pass[i]) xor b);
+  end;
+  pass := StringReplace(pass, '//' , '/', [rfReplaceAll]);
 
+  url := 'https://www.google.com/accounts/ClientLogin';
+	data := 'Email=' + email + '&Passwd=' + pass + '&service=cl&source=' + AUTHOR + '-' + INTERNAL_NAME + '-' + VERSION;
+  Header := TStringList.Create;
+  Answer := HTTPRequest('POST', url, data, true, Header, Proxy, Err);
   Header.Text := Answer;
+  if not (Err = 200) then begin
+    if Header.Values['Error'] <> '' then
+      Answer := 'GC: ' + Header.Values['Error']
+    else
+      Answer := 'HTTP: ' + IntToStr(Err) + ', ' + Answer;
+    Header.Free;
+    exit;
+  end;
+
   Auth := Header.Values['Auth'];
   if Auth = '' then begin
+    Header.Free;
     Answer := 'GC: ' + Header.Values['Error'];
     exit;
   end;
@@ -235,9 +239,10 @@ begin
   Header.NameValueSeparator := ':';
   Header.Add('authorization: GoogleLogin auth=' + Auth);
   Header.Add('Content-Type: application/atom+xml');
-  Answer := HTTPRequest('POST', url, data, '', Header, Proxy, Err);
+  Answer := HTTPRequest('POST', url, data, not true, Header, Proxy, Err);
+  Header.Free;
 
-  Result := (Err = -1);
+  Result := (Err = 201); // HTTP response code 201: post created
 end;
 
 begin
@@ -266,4 +271,9 @@ end.
 v0.1.1
 [+] added DurationMinutes;
 [~] changed DeltaMinutes form 2 to 4 minutes.
+
+v0.1.2
+[+] added xor-decoding of password;
+[~!] fixed detection of successful creation of event;
+[~] minor fixes.
 *)
